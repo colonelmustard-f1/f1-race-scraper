@@ -3,7 +3,7 @@ import * as cheerio from 'cheerio';
 
 export const runtime = 'edge';
 
-// Known F1 drivers for additional validation
+// Expanded list of known F1 drivers for validation
 const KNOWN_F1_DRIVERS = [
     'Verstappen', 'Pérez', 'Leclerc', 'Sainz', 'Russell', 'Hamilton', 
     'Norris', 'Piastri', 'Alonso', 'Stroll', 'Ocon', 'Gasly', 
@@ -11,7 +11,7 @@ const KNOWN_F1_DRIVERS = [
     'Hülkenberg', 'Ricciardo', 'Bearman', 'Zhou', 'Guanyu'
 ];
 
-// Clean and validate driver names
+// Helper function to clean driver names
 function cleanDriverName(name) {
     return name
         .replace(/\s*\(.*\)$/, '')  // Remove parenthetical notes
@@ -37,22 +37,19 @@ export async function GET(request) {
         const html = await response.text();
         const $ = cheerio.load(html);
         
-        // Detailed table finding with specific race results table criteria
+        // More precise table finding for race results
         const raceTable = $('.wikitable').filter((i, table) => {
-            const caption = $(table).find('caption').text().toLowerCase();
+            // Look for tables with specific race result headers
             const headers = $(table).find('th').map((j, header) => 
                 $(header).text().toLowerCase().trim()
             ).get();
             
-            const raceKeywords = ['race', 'result', 'classification', 'finishers'];
-            const headerKeywords = ['pos', 'position', 'driver', 'time'];
+            const raceKeywords = ['pos', 'position', 'driver', 'constructor', 'laps', 'time', 'grid', 'points'];
+            const captionMatch = $(table).find('caption').text().toLowerCase().includes('race');
             
-            const hasCaptionMatch = raceKeywords.some(keyword => caption.includes(keyword));
-            const hasHeaderMatch = headerKeywords.some(keyword => 
+            return captionMatch || raceKeywords.every(keyword => 
                 headers.some(header => header.includes(keyword))
             );
-            
-            return hasCaptionMatch || hasHeaderMatch;
         }).first();
         
         const positions = {};
@@ -61,51 +58,38 @@ export async function GET(request) {
         if (raceTable.length) {
             const tableRows = raceTable.find('tr').slice(1);
             
-            // Possible column configurations to extract positions and drivers
-            const parseConfigs = [
-                { pos: 0, driver: 2 },   // Standard Wikipedia table format
-                { pos: 1, driver: 2 },   // Alternative format
-                { pos: 0, driver: 1 }    // Another possible format
-            ];
-
             tableRows.each((i, row) => {
                 const cells = $(row).find('td');
                 
-                for (let config of parseConfigs) {
-                    // Ensure we have enough columns
-                    if (cells.length > Math.max(config.pos, config.driver)) {
-                        const posText = $(cells[config.pos]).text().trim();
-                        const driverText = $(cells[config.driver]).text().trim();
+                if (cells.length >= 7) {
+                    const posText = $(cells[0]).text().trim();
+                    const driverText = $(cells[2]).text().trim();
+                    const constructorText = $(cells[3]).text().trim();
+                    const lapsText = $(cells[4]).text().trim();
+                    const timeText = $(cells[5]).text().trim();
+                    const gridText = $(cells[6]).text().trim();
+                    const pointsText = $(cells[7]).text().trim();
+                    
+                    // Validate position is a number
+                    if (/^\d+$/.test(posText)) {
+                        const pos = parseInt(posText);
                         
-                        // Validate position is a number
-                        if (/^\d+$/.test(posText)) {
-                            const pos = parseInt(posText);
+                        // Extract last name and clean
+                        const dirtyDriverName = driverText.split(' ').pop();
+                        const cleanedDriverName = cleanDriverName(dirtyDriverName);
+                        
+                        // Validate driver name
+                        if (KNOWN_F1_DRIVERS.includes(cleanedDriverName)) {
+                            positions[cleanedDriverName] = pos;
                             
-                            // Extract driver name (last word)
-                            const dirtyDriverName = driverText.split(' ').pop();
-                            const cleanedDriverName = cleanDriverName(dirtyDriverName);
-                            
-                            // Validate driver name
-                            if (KNOWN_F1_DRIVERS.includes(cleanedDriverName)) {
-                                positions[cleanedDriverName] = pos;
-                                break;  // Exit config loop once we find a valid row
+                            // Check for DNF
+                            if (timeText.toLowerCase().includes('ret') || timeText.toLowerCase().includes('dnf')) {
+                                dnfs.push({
+                                    driver: cleanedDriverName,
+                                    lap: 0  // Placeholder for lap number
+                                });
                             }
                         }
-                    }
-                }
-
-                // Attempt to find DNFs in a separate pass
-                const statusCell = cells.length > 5 ? $(cells[5]).text().toLowerCase().trim() : '';
-                if (statusCell.includes('ret') || statusCell.includes('dnf')) {
-                    const driverText = $(cells[2]).text().trim();
-                    const dirtyDriverName = driverText.split(' ').pop();
-                    const cleanedDriverName = cleanDriverName(dirtyDriverName);
-                    
-                    if (KNOWN_F1_DRIVERS.includes(cleanedDriverName)) {
-                        dnfs.push({
-                            driver: cleanedDriverName,
-                            lap: 0  // Placeholder for now
-                        });
                     }
                 }
             });
@@ -119,7 +103,7 @@ export async function GET(request) {
                 foundTable: raceTable.length > 0,
                 foundPositions: Object.keys(positions).length,
                 foundDNFs: dnfs.length,
-                parsedTable: raceTable.html()  // Add full table HTML for debugging
+                tableHTML: raceTable.html()  // Add full table HTML for debugging
             }
         });
     } catch (error) {
