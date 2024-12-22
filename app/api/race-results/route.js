@@ -21,38 +21,54 @@ export async function GET(request) {
         const html = await response.text();
         const $ = cheerio.load(html);
         
+        // Debug: Log all table captions
+        const tableCaptions = [];
+        $('.wikitable caption').each((i, caption) => {
+            tableCaptions.push($(caption).text().trim());
+        });
+        
+        // Find race results table with more flexible matching
         const raceTable = $('.wikitable').filter((i, table) => {
-            return $(table).find('caption').text().toLowerCase().includes('race result');
+            const caption = $(table).find('caption').text().toLowerCase();
+            return caption.includes('race') || caption.includes('result') || caption.includes('classification');
         }).first();
 
         const positions = {};
         const dnfs = [];
         
-        raceTable.find('tr').slice(1).each((i, row) => {
-            const cells = $(row).find('td');
-            if (cells.length < 6) return;
-            
-            const pos = $(cells[0]).text().trim();
-            const driver = $(cells[2]).text().trim().split(' ').pop();
-            const status = $(cells[5]).text().trim();
-            const laps = parseInt($(cells[4]).text().trim());
+        // Debug: Log table structure
+        const tableHTML = raceTable.html();
+        
+        if (raceTable.length) {
+            raceTable.find('tr').slice(1).each((i, row) => {
+                const cells = $(row).find('td');
+                if (cells.length < 6) return;
+                
+                const pos = $(cells[0]).text().trim();
+                const driver = $(cells[2]).text().trim().split(' ').pop();
+                const status = $(cells[5]).text().trim();
+                const laps = parseInt($(cells[4]).text().trim());
 
-            if (status.toLowerCase().includes('ret')) {
-                dnfs.push({
-                    driver,
-                    lap: laps || 0
-                });
-            } else {
-                positions[driver] = parseInt(pos);
-            }
-        });
-
-        dnfs.sort((a, b) => a.lap - b.lap);
+                if (status.toLowerCase().includes('ret')) {
+                    dnfs.push({
+                        driver,
+                        lap: laps || 0
+                    });
+                } else {
+                    positions[driver] = parseInt(pos);
+                }
+            });
+        }
 
         return NextResponse.json({
             positions,
             dnfs,
-            url
+            url,
+            debug: {
+                tableCaptions,
+                foundTable: raceTable.length > 0,
+                tableHTML: tableHTML || 'No table found'
+            }
         });
     } catch (error) {
         return NextResponse.json({
