@@ -21,53 +21,98 @@ export async function GET(request) {
         const html = await response.text();
         const $ = cheerio.load(html);
         
-        // Debug: Log all table captions
-        const tableCaptions = [];
-        $('.wikitable caption').each((i, caption) => {
-            tableCaptions.push($(caption).text().trim());
+        // Enhanced debugging: Log all tables
+        const allTables = [];
+        $('.wikitable').each((i, table) => {
+            const caption = $(table).find('caption').text().trim();
+            const headers = $(table).find('th').map((j, header) => $(header).text().trim()).get();
+            allTables.push({
+                index: i,
+                caption: caption,
+                headers: headers
+            });
         });
         
-        // Find race results table with more flexible matching
+        // More flexible table finding strategy
         const raceTable = $('.wikitable').filter((i, table) => {
             const caption = $(table).find('caption').text().toLowerCase();
-            return caption.includes('race') || caption.includes('result') || caption.includes('classification');
+            const headers = $(table).find('th').map((j, header) => $(header).text().toLowerCase().trim()).get();
+            
+            // Look for tables with race-related keywords
+            const raceKeywords = ['race', 'result', 'classification', 'finishers', 'final'];
+            const headerKeywords = ['pos', 'position', 'driver', 'team', 'time', 'status'];
+            
+            const hasCaptionMatch = raceKeywords.some(keyword => caption.includes(keyword));
+            const hasHeaderMatch = headerKeywords.some(keyword => 
+                headers.some(header => header.includes(keyword))
+            );
+            
+            return hasCaptionMatch || hasHeaderMatch;
         }).first();
-
+        
         const positions = {};
         const dnfs = [];
         
-        // Debug: Log table structure
-        const tableHTML = raceTable.html();
-        
         if (raceTable.length) {
-            raceTable.find('tr').slice(1).each((i, row) => {
+            const tableRows = raceTable.find('tr').slice(1);
+            
+            tableRows.each((i, row) => {
                 const cells = $(row).find('td');
-                if (cells.length < 6) return;
                 
-                const pos = $(cells[0]).text().trim();
-                const driver = $(cells[2]).text().trim().split(' ').pop();
-                const status = $(cells[5]).text().trim();
-                const laps = parseInt($(cells[4]).text().trim());
-
-                if (status.toLowerCase().includes('ret')) {
-                    dnfs.push({
-                        driver,
-                        lap: laps || 0
-                    });
-                } else {
-                    positions[driver] = parseInt(pos);
+                // Try multiple possible column configurations
+                const posCandidates = [0, 1];  // Different possible position column indices
+                const driverCandidates = [1, 2, 3];  // Different possible driver column indices
+                const statusCandidates = [4, 5, 6];  // Different possible status column indices
+                const lapCandidates = [3, 4, 5];  // Different possible lap column indices
+                
+                // Try different column configurations
+                for (let posIndex of posCandidates) {
+                    for (let driverIndex of driverCandidates) {
+                        for (let statusIndex of statusCandidates) {
+                            for (let lapIndex of lapCandidates) {
+                                if (cells.length > Math.max(posIndex, driverIndex, statusIndex, lapIndex)) {
+                                    const posText = $(cells[posIndex]).text().trim();
+                                    const driverText = $(cells[driverIndex]).text().trim();
+                                    const statusText = $(cells[statusIndex]).text().trim().toLowerCase();
+                                    const lapText = $(cells[lapIndex]).text().trim();
+                                    
+                                    // Check if this looks like a valid row
+                                    if (posText && /^\d+$/.test(posText) && driverText) {
+                                        const pos = parseInt(posText);
+                                        
+                                        // Extract last name or full name depending on format
+                                        const driver = driverText.split(' ').pop();
+                                        
+                                        // Check for DNF
+                                        if (statusText.includes('ret') || statusText.includes('dnf')) {
+                                            dnfs.push({
+                                                driver,
+                                                lap: parseInt(lapText) || 0
+                                            });
+                                        } else {
+                                            positions[driver] = pos;
+                                        }
+                                        
+                                        // Break out of nested loops if we found a valid row
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             });
         }
-
+        
         return NextResponse.json({
             positions,
             dnfs,
             url,
             debug: {
-                tableCaptions,
+                allTables,
                 foundTable: raceTable.length > 0,
-                tableHTML: tableHTML || 'No table found'
+                foundPositions: Object.keys(positions).length,
+                foundDNFs: dnfs.length
             }
         });
     } catch (error) {
