@@ -1,5 +1,4 @@
-import axios from 'axios';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 
 export const runtime = 'edge';
 
@@ -24,8 +23,9 @@ export async function GET(request) {
 
     try {
         const url = `https://en.wikipedia.org/wiki/${year}_${race}_Grand_Prix`;
-        const response = await axios.get(url);
-        const $ = cheerio.load(response.data);
+        const response = await fetch(url);
+        const html = await response.text();
+        const $ = cheerio.load(html);
         
         // Find race results table
         const raceTable = $('.wikitable').filter((i, table) => {
@@ -40,10 +40,10 @@ export async function GET(request) {
             const cells = $(row).find('td');
             if (cells.length < 6) return;
             
-            const pos = cells.eq(0).text().trim();
-            const driver = cells.eq(2).text().trim().split(' ').pop(); // Get last name
-            const status = cells.eq(5).text().trim();
-            const laps = parseInt(cells.eq(4).text().trim());
+            const pos = $(cells[0]).text().trim();
+            const driver = $(cells[2]).text().trim().split(' ').pop(); // Get last name
+            const status = $(cells[5]).text().trim();
+            const laps = parseInt($(cells[4]).text().trim());
 
             if (status.toLowerCase().includes('ret')) {
                 dnfs.push({
@@ -72,8 +72,7 @@ export async function GET(request) {
     } catch (error) {
         return new Response(JSON.stringify({
             error: 'Failed to fetch race results',
-            details: error.message,
-            url
+            details: error.message
         }), {
             status: 500,
             headers: {
